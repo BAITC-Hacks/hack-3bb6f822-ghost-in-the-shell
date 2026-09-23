@@ -115,5 +115,12 @@ requirements.txt<br>
   а не всю сеть целиком.
 
 ## Данные
+Repository:
+https://github.com/BAITC-Hacks/hack-3bb6f822-ghost-in-the-shell
 
+Presentation:
+[https://docs.google.com/presentation/d/1PCglSGLlLyTean3qFoHPjy5VmfYUaGBy/edit?usp=sharing&ouid=115657269000839204838&rtpof=true&sd=true]
+
+Demo:
+локальный запуск через streamlit run app.py
 Описание полей и параметров сбора графа — в [`data/README.md`](data/README.md).
