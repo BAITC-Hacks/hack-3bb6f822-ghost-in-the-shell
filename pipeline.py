@@ -6,7 +6,16 @@ HackAlem AI — Граф денег: пайплайн ролей, кластер
 
 Все правила ниже — детерминированные (без ML/LLM), пороги подобраны под
 объявленные в README датасета кандидаты на каждую роль. Обоснование
-каждого порога — см. README.md решения (генерируется отдельно).
+каждого порога — см. README.md решения.
+
+ВАЖНО (изменение от предыдущей версии): правило transit проверяется
+РАНЬШЕ consolidator/distributor. Причина: условие consolidator
+(us>=3 или ideg>=3) само по себе очень широкое и ловит в том числе узлы,
+которые получили от нескольких плательщиков, но тут же почти всё
+передали дальше (чистый транзит с несколькими источниками). Такой узел
+по смыслу ТЗ — transit ("пропускает средства дальше, не удерживая"),
+а не consolidator ("аккумулирует средства"). Проверка удержания через
+ratio = out/in решает эту неоднозначность объяснимо и без ML.
 """
 
 import pandas as pd
@@ -72,8 +81,6 @@ for cid, members in enumerate(communities):
         cluster_of[g] = cid
 
 # ---------------------------------------------------------- role logic ----
-ROLE_ORDER = ["coordinator", "consolidator", "distributor", "transit", "terminal", "peripheral"]
-
 def classify(gid):
     ideg, odeg = in_deg.get(gid, 0), out_deg.get(gid, 0)
     ia, oa = in_amt.get(gid, 0.0), out_amt.get(gid, 0.0)
@@ -96,26 +103,29 @@ def classify(gid):
               f"кандидат в организаторы")
         return "coordinator", round(conf, 2), ev[:200]
 
-    # consolidator: сходятся независимые seed-цепочки или явная конвергенция
-    if us >= 3 or ideg >= 3:
+    # transit: пришло ~ ушло, быстро — проверяем ДО consolidator/distributor,
+    # т.к. это более специфичный и однозначный признак (сквозной проход денег)
+    if ratio is not None and 0.8 <= ratio <= 1.2 and lag is not None and lag <= 3 and ideg >= 1 and odeg >= 1:
+        conf = min(1.0, 0.6 + (3 - lag) / 10)
+        ev = (f"Транзит: вход {ia:,.0f} KZT ≈ выход {oa:,.0f} KZT (ratio={ratio:.2f}), "
+              f"задержка приход→уход {lag} дн., плательщиков {ideg}")
+        return "transit", round(conf, 2), ev[:200]
+
+    # consolidator: сходятся независимые seed-цепочки или явная конвергенция,
+    # И деньги при этом заметно удерживаются (не чистый транзит)
+    holds_money = ratio is None or ratio < 0.6
+    if (us >= 3 or ideg >= 3) and holds_money:
         conf = min(1.0, 0.4 + min(us, 8) / 10 + min(ideg, 10) / 30)
         ev = (f"Получает от {ideg} разных плательщиков, из них деньги от "
-              f"{us} независимых seed-цепочек; входящая сумма {ia:,.0f} KZT")
+              f"{us} независимых seed-цепочек; входящая сумма {ia:,.0f} KZT, "
+              f"удерживает {'>40%' if ratio is None else f'{(1-ratio)*100:.0f}%'} полученного")
         return "consolidator", round(conf, 2), ev[:200]
 
     # distributor: веерная раздача, сам не аккумулирует
     if odeg >= 5 and ideg <= 2:
         conf = min(1.0, 0.4 + min(odeg, 30) / 40)
-        share = (oa / max(ia, 1)) if ia > 0 else None
         ev = f"Раздаёт дальше {odeg} получателям (веер), входящих связей {ideg}, отдаёт {oa:,.0f} KZT"
         return "distributor", round(conf, 2), ev[:200]
-
-    # transit: пришло ~ ушло, быстро
-    if ratio is not None and 0.8 <= ratio <= 1.2 and lag is not None and lag <= 3 and ideg >= 1 and odeg >= 1:
-        conf = min(1.0, 0.6 + (3 - lag) / 10)
-        ev = (f"Транзит: вход {ia:,.0f} KZT ≈ выход {oa:,.0f} KZT (ratio={ratio:.2f}), "
-              f"задержка приход→уход {lag} дн.")
-        return "transit", round(conf, 2), ev[:200]
 
     # terminal: деньги дошли, дальше в графе не уходят
     if odeg == 0 and ideg >= 1:
